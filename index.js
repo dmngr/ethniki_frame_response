@@ -58,57 +58,67 @@ exports.handler = function(event, context, callback) {
 
             event.store = _.pick(JSON.parse(store), ['paymentGateways']);
 
-            body.bank_id = 'ethniki';
-            body.TransactionId = body.dts_reference;
-            body.SupportReferenceID = body.merchantreference;
-            body.MerchantReference = body.merchantreference;
-            body.timestamp = payment_timestamp;
-            body.store_id = store_id;
-            body.RequestType = 'SALE_FRAME';
+            return lambda_invoke('ethniki_web_service', 'dev', null, {
+                dts_reference: body.dts_reference,
+                client: cred.client,
+                password: cred.password,
+                RequestType: 'query'
+              })
+              .then(res => {
+                res.bank_id = 'ethniki';
+                res.TransactionId = res.datacash_reference;
+                res.SupportReferenceID = res.merchantreference;
+                res.MerchantReference = res.merchantreference;
+                res.timestamp = payment_timestamp;
+                res.store_id = store_id;
+                res.RequestType = 'SALE_FRAME';
 
-            delete body.merchantreference;
-            delete body.dts_reference;
-            delete body.group;
+                delete res.merchantreference;
+                delete res.datacash_reference;
+                delete res.time;
 
-            console.log('putting in banks log and updating order');
-            console.log('to put to db:', body);
+                console.log('putting in banks log and updating order');
+                console.log('to put to db:', res);
 
-            return client.put({
-                TableName: 'banks_log',
-                Item: body
-              }).promise()
-              .then(() => order_id ?
-                client.update({
-                  TableName: 'orders',
-                  Key: {
-                    store_id: store_id,
-                    order_id: order_id
-                  },
-                  UpdateExpression: 'set #status = :status, #payment_id = :payment_id, #MerchantReference = :MerchantReference, #selectedPaymentMethodID = :selectedPaymentMethodID, #payment_timestamp = :payment_timestamp',
-                  ConditionExpression: 'attribute_not_exists(#payment_id) AND attribute_exists(#order_id)',
-                  ExpressionAttributeNames: {
-                    '#order_id': 'order_id',
-                    '#payment_id': 'payment_id',
-                    '#MerchantReference': 'MerchantReference',
-                    '#status': 'status',
-                    '#selectedPaymentMethodID': 'selectedPaymentMethodID',
-                    '#payment_timestamp': 'payment_timestamp'
-                  },
-                  ExpressionAttributeValues: {
-                    ':payment_id': body.TransactionId,
-                    ':MerchantReference': body.MerchantReference,
-                    ':status': 'pending',
-                    ':selectedPaymentMethodID': 'ethniki',
-                    ':payment_timestamp': payment_timestamp
-                  }
-                }).promise() :
-                // TODO: refund save card charge
-                Promise.resolve()
-                .then(res => res.success ? Promise.resolve() : Promise.reject(res)))
-              .then(() => {
-                // TODO: save card
-                return Promise.resolve();
+                return client.put({
+                    TableName: 'banks_log',
+                    Item: res
+                  }).promise()
+                  .then(() => order_id && res.status === '1' ?
+                    client.update({
+                      TableName: 'orders',
+                      Key: {
+                        store_id: store_id,
+                        order_id: order_id
+                      },
+                      UpdateExpression: 'set #status = :status, #payment_id = :payment_id, #MerchantReference = :MerchantReference, #selectedPaymentMethodID = :selectedPaymentMethodID, #payment_timestamp = :payment_timestamp',
+                      ConditionExpression: 'attribute_not_exists(#payment_id) AND attribute_exists(#order_id)',
+                      ExpressionAttributeNames: {
+                        '#order_id': 'order_id',
+                        '#payment_id': 'payment_id',
+                        '#MerchantReference': 'MerchantReference',
+                        '#status': 'status',
+                        '#selectedPaymentMethodID': 'selectedPaymentMethodID',
+                        '#payment_timestamp': 'payment_timestamp'
+                      },
+                      ExpressionAttributeValues: {
+                        ':payment_id': res.TransactionId,
+                        ':MerchantReference': res.MerchantReference,
+                        ':status': 'pending',
+                        ':selectedPaymentMethodID': 'ethniki',
+                        ':payment_timestamp': payment_timestamp
+                      }
+                    }).promise() :
+                    // TODO: refund save card charge
+                    Promise.resolve()
+                    .then(res => res.success ? Promise.resolve() : Promise.reject(res)))
+                  .then(() => {
+                    // TODO: save card
+                    return Promise.resolve();
+                  });
+
               });
+
           }
         );
       }
@@ -136,7 +146,7 @@ exports.handler = function(event, context, callback) {
       if (resource === 'success') h3 += 'πραγματοποιήθηκε επιτυχώς!';
       else if (resource === 'expiry') h3 += '';
       else if (resource === 'back') h3 += 'ακυρώθηκε επιτυχώς!';
-      else h3 = 'απέτυχε!';
+      else h3 += 'απέτυχε!';
 
       context.succeed({
         statusCode: 200,
