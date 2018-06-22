@@ -11,15 +11,15 @@ const _ = require('lodash');
 const s3_getObject = Promise.promisify(require('@deliverymanager/util').s3_getObject);
 const lambda_invoke = Promise.promisify(require('@deliverymanager/util').lambda_invoke);
 
-const get_digest = require('./get_digest');
-
 exports.handler = function(event, context, callback) {
   let resource;
   let group;
+  let store_id;
+  let order_id;
+  let savecard;
 
   Promise.try(() => {
       console.log('event:', JSON.stringify(event, null, 2));
-      let payment_timestamp = Date.now().toString();
       resource = event.resource.substr(event.resource.lastIndexOf('/') + 1);
       console.log('resource:', resource);
       let body = event.queryStringParameters;
@@ -29,10 +29,9 @@ exports.handler = function(event, context, callback) {
 
       if (resource === 'back' || resource === 'expiry') return Promise.resolve();
       else {
-        let store_id = body.merchantreference.slice(0, 6);
-        let order_id = body.merchantreference.slice(16);
-        let group = body.group;
-        let savecard;
+        store_id = body.merchantreference.slice(0, 6);
+        order_id = body.merchantreference.slice(16);
+        group = body.group;
 
         if (order_id.indexOf('scard') !== -1) {
           savecard = true;
@@ -62,73 +61,56 @@ exports.handler = function(event, context, callback) {
                 dts_reference: body.dts_reference,
                 client: cred.client,
                 password: cred.password,
-                RequestType: 'query'
+                RequestType: 'hcc_auth',
+                Amount: body.Amount,
+                store_id: store_id
               })
-              .then(res => {
-                res.bank_id = 'ethniki';
-                res.TransactionId = res.datacash_reference;
-                res.SupportReferenceID = res.merchantreference;
-                res.MerchantReference = res.merchantreference;
-                res.timestamp = payment_timestamp;
-                res.store_id = store_id;
-                res.RequestType = 'SALE_FRAME';
-
-                delete res.merchantreference;
-                delete res.datacash_reference;
-                delete res.time;
-
-                console.log('putting in banks log and updating order');
-                console.log('to put to db:', res);
-
-                return client.put({
-                    TableName: 'banks_log',
-                    Item: res
-                  }).promise()
-                  .then(() => order_id && res.status === '1' ?
-                    client.update({
-                      TableName: 'orders',
-                      Key: {
-                        store_id: store_id,
-                        order_id: order_id
-                      },
-                      UpdateExpression: 'set #status = :status, #payment_id = :payment_id, #MerchantReference = :MerchantReference, #selectedPaymentMethodID = :selectedPaymentMethodID, #payment_timestamp = :payment_timestamp',
-                      ConditionExpression: 'attribute_not_exists(#payment_id) AND attribute_exists(#order_id)',
-                      ExpressionAttributeNames: {
-                        '#order_id': 'order_id',
-                        '#payment_id': 'payment_id',
-                        '#MerchantReference': 'MerchantReference',
-                        '#status': 'status',
-                        '#selectedPaymentMethodID': 'selectedPaymentMethodID',
-                        '#payment_timestamp': 'payment_timestamp'
-                      },
-                      ExpressionAttributeValues: {
-                        ':payment_id': res.TransactionId,
-                        ':MerchantReference': res.MerchantReference,
-                        ':status': 'pending',
-                        ':selectedPaymentMethodID': 'ethniki',
-                        ':payment_timestamp': payment_timestamp
-                      }
-                    }).promise() :
-                    // TODO: refund save card charge
-                    Promise.resolve()
-                    .then(res => res.success ? Promise.resolve() : Promise.reject(res)))
-                  .then(() => {
-                    // TODO: save card
-                    return Promise.resolve();
-                  });
-
-              });
-
+              .then(res => res.success ? Promise.resolve(res) : Promise.reject(res));
           }
         );
       }
+    })
+    .then(body => {
+      resource = body.status === '1' ? 'success' : 'failure';
 
+      return order_id && resource === 'success' ?
+        client.update({
+          TableName: 'orders',
+          Key: {
+            store_id: store_id,
+            order_id: order_id
+          },
+          UpdateExpression: 'set #status = :status, #payment_id = :payment_id, #MerchantReference = :MerchantReference, #selectedPaymentMethodID = :selectedPaymentMethodID, #payment_timestamp = :payment_timestamp',
+          ConditionExpression: 'attribute_not_exists(#payment_id) AND attribute_exists(#order_id)',
+          ExpressionAttributeNames: {
+            '#order_id': 'order_id',
+            '#payment_id': 'payment_id',
+            '#MerchantReference': 'MerchantReference',
+            '#status': 'status',
+            '#selectedPaymentMethodID': 'selectedPaymentMethodID',
+            '#payment_timestamp': 'payment_timestamp'
+          },
+          ExpressionAttributeValues: {
+            ':payment_id': body.TransactionId,
+            ':MerchantReference': body.MerchantReference,
+            ':status': 'pending',
+            ':selectedPaymentMethodID': 'ethniki',
+            ':payment_timestamp': body.timestamp
+          }
+        }).promise() :
+        // TODO: refund save card charge
+        Promise.resolve({
+          success: true
+        })
+        .then(res => res.success ? Promise.resolve() : Promise.reject(res));
     })
     .then(() => {
       console.log('RequestId SUCCESS');
       return Promise.resolve();
     })
     .catch(err => {
+      resource = 'failure';
+
       console.log('err:', err);
 
       try {
