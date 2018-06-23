@@ -63,7 +63,8 @@ exports.handler = function(event, context, callback) {
                 password: cred.password,
                 RequestType: 'hcc_auth',
                 Amount: body.Amount,
-                store_id: store_id
+                store_id: store_id,
+                token: body.token
               })
               .then(res => res.success ? Promise.resolve(res) : Promise.reject(res));
           }
