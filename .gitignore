@@ -1,2 +1,4 @@
 node_modules/
 outfile*
+bin_codes_cred.json
+cred.json

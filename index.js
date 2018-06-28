@@ -4,12 +4,18 @@ var Promise = require('bluebird');
 
 const AWS = require('aws-sdk');
 const client = new AWS.DynamoDB.DocumentClient();
+const sqs = new AWS.SQS();
 
 const qs = require('query-string');
 const _ = require('lodash');
+const moment = require('moment');
 
-const s3_getObject = Promise.promisify(require('@deliverymanager/util').s3_getObject);
-const lambda_invoke = Promise.promisify(require('@deliverymanager/util').lambda_invoke);
+const util = require('@deliverymanager/util');
+const s3_getObject = Promise.promisify(util.s3_getObject);
+const lambda_invoke = Promise.promisify(util.lambda_invoke);
+const prune_null = util.prune_null;
+
+const get_card_info = require('./get_card_info');
 
 exports.handler = function(event, context, callback) {
   let resource;
@@ -17,6 +23,9 @@ exports.handler = function(event, context, callback) {
   let store_id;
   let order_id;
   let savecard;
+  let mobile;
+  let cred;
+  let amount;
 
   Promise.try(() => {
       console.log('event:', JSON.stringify(event, null, 2));
@@ -32,6 +41,8 @@ exports.handler = function(event, context, callback) {
         store_id = body.merchantreference.slice(0, 6);
         order_id = body.merchantreference.slice(6, -10);
         group = body.group;
+        mobile = body.mobile;
+        amount = body.Amount;
 
         if (order_id.indexOf('scard') !== -1) {
           savecard = true;
@@ -53,8 +64,8 @@ exports.handler = function(event, context, callback) {
             Bucket: 'allgroups',
             Key: `${group}/${store_id}/storeAccount.json`
           }, {}),
-          (cred, store) => {
-            cred = JSON.parse(cred);
+          (s3_cred, store) => {
+            cred = JSON.parse(s3_cred);
             console.log('cred:', cred);
 
             event.store = _.pick(JSON.parse(store), ['paymentGateways']);
@@ -74,12 +85,14 @@ exports.handler = function(event, context, callback) {
       }
     })
     .then(body => {
+      console.log('body:', body);
       if (!body) return Promise.resolve();
-      else {
-        resource = body.status === '1' ? 'success' : 'failure';
+      else if (body.status === '1') {
+        resource = 'success';
 
-        return order_id && resource === 'success' ?
-          client.update({
+        return Promise.join(
+          // update order if it exists
+          order_id ? client.update({
             TableName: 'orders',
             Key: {
               store_id: store_id,
@@ -102,13 +115,142 @@ exports.handler = function(event, context, callback) {
               ':selectedPaymentMethodID': 'ethniki',
               ':payment_timestamp': body.timestamp
             }
-          }).promise() :
-          // TODO: refund save card charge
-          Promise.resolve({
-            success: true
-          })
-          .then(res => res.success ? Promise.resolve() : Promise.reject(res));
-      }
+          }).promise() : Promise.resolve(),
+          // send message for refund to worker
+          !order_id && savecard ? sqs.sendMessage({
+            QueueUrl: 'https://sqs.eu-west-1.amazonaws.com/787324535455/awseb-e-bw5rm6jc3w-stack-AWSEBWorkerQueue-3PIE0EI37NAY',
+            MessageBody: JSON.stringify({
+              type: 'refund',
+              refund: {
+                paymentGateway: 'ethniki',
+                store_id: store_id,
+                client: cred.client,
+                password: cred.password,
+                RequestType: 'refund',
+                Amount: amount,
+                TransactionId: body.TransactionId,
+                MerchantReference: body.MerchantReference
+              }
+            }),
+            DelaySeconds: 0
+          }).promise() : Promise.resolve(),
+          // save card
+          savecard ? Promise.join(
+            // get customer cards
+            client.get({
+              TableName: 'customers',
+              Key: {
+                group: group,
+                mobile: mobile
+              },
+              AttributesToGet: [
+                'mobile',
+                'cards'
+              ]
+            }).promise(),
+            get_card_info(body.pan),
+            (customer, card_info) => {
+              customer = prune_null(customer.Item);
+              console.log('Saving card');
+              console.log('customer:', customer);
+
+              let creditCard = {
+                'Number': body.pan,
+                ExpirationDate: moment().year(parseInt(body.expirydate.slice(2), 10) + 2000).month(parseInt(body.expirydate.slice(0, 2), 10) - 1).endOf('month').format('YYYY-MM-DDT00:00:00')
+              };
+
+              if (_.isEmpty(customer.cards)) customer.cards = [];
+
+              let index = _.findIndex(customer.cards, {
+                number: creditCard.Number
+              });
+
+              if (index === -1) {
+                customer.cards.push({
+                  paymentGatewayLabel: 'Εθνική Τράπεζα',
+                  paymentGateway: "ethniki",
+                  number: creditCard.Number,
+                  expiry: creditCard.ExpirationDate,
+                  timestamp: Date.now(),
+                  bank: card_info.bank,
+                  cardType: card_info.cardType,
+                  stores: [{
+                    store_id: store_id,
+                    timestamp: Date.now(),
+                    transaction_id: body.TransactionId,
+                    token: body.TransactionId,
+                    publicKey: body.mid
+                  }]
+                });
+
+              } else {
+                let storeIndex = _.findIndex(customer.cards[index].stores, {
+                  store_id: store_id
+                });
+
+                if (storeIndex !== -1) {
+                  customer.cards[index].stores[storeIndex] = {
+                    store_id: store_id,
+                    timestamp: Date.now(),
+                    transaction_id: body.TransactionId,
+                    token: body.TransactionId,
+                    publicKey: body.mid
+                  };
+
+                  customer.cards[index] = {
+                    paymentGatewayLabel: 'Εθνική Τράπεζα',
+                    paymentGateway: "ethniki",
+                    number: creditCard.Number,
+                    expiry: creditCard.ExpirationDate,
+                    timestamp: Date.now(),
+                    bank: card_info.bank,
+                    cardType: card_info.cardType,
+                    stores: customer.cards[index].stores
+                  };
+
+                } else {
+                  customer.cards[index].stores.push({
+                    store_id: store_id,
+                    timestamp: Date.now(),
+                    transaction_id: body.TransactionId,
+                    token: body.TransactionId,
+                    publicKey: body.mid
+                  });
+
+                  customer.cards[index] = {
+                    paymentGatewayLabel: 'Εθνική Τράπεζα',
+                    paymentGateway: "ethniki",
+                    number: creditCard.Number,
+                    expiry: creditCard.ExpirationDate,
+                    timestamp: Date.now(),
+                    bank: card_info.bank,
+                    cardType: card_info.cardType,
+                    stores: customer.cards[index].stores
+                  };
+                }
+              }
+
+              // update customer cards
+              return client.update({
+                TableName: 'customers',
+                Key: {
+                  group: group,
+                  mobile: customer.mobile
+                },
+                UpdateExpression: 'set #cards = :cards',
+                ExpressionAttributeNames: {
+                  '#cards': 'cards'
+                },
+                ExpressionAttributeValues: {
+                  ':cards': customer.cards
+                }
+              }).promise();
+            }
+          ) : Promise.resolve(),
+          () => Promise.resolve()
+        );
+
+      } else return Promise.reject(body);
     })
     .then(() => {
       console.log('RequestId SUCCESS');
@@ -143,6 +285,7 @@ exports.handler = function(event, context, callback) {
         statusCode: 200,
         // TODO: resource
         body: `<link rel="stylesheet" href="https://${event.store ? event.store.paymentGateways.ethniki.url.replace('frame.html', '') : 'demo.deliverymanager.gr/ethniki/'}style.css">
+        <link rel="stylesheet" href="https://${event.store ? event.store.paymentGateways.ethniki.url.replace('frame.html', '') : 'demo.deliverymanager.gr/ethniki/'}fonts/icomoon.woff?leqvcx">
             <div align="center">
                 <span class="icon-${resource}" style="color: ${resource === 'success' ? 'lightgreen' : 'red'}; font-size: 200px; font-weight: bold;">
                 </span>
