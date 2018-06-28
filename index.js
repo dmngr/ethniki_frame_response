@@ -43,10 +43,12 @@ exports.handler = function(event, context, callback) {
         console.log('savecard:', savecard);
 
         return Promise.join(
+          // get cred
           s3_getObject({
             Bucket: 'bankscred',
             Key: `${group}/${store_id}/ethniki/cred.json`
           }, {}),
+          // get storeAccount
           s3_getObject({
             Bucket: 'allgroups',
             Key: `${group}/${store_id}/storeAccount.json`
@@ -72,38 +74,41 @@ exports.handler = function(event, context, callback) {
       }
     })
     .then(body => {
-      resource = body.status === '1' ? 'success' : 'failure';
+      if (!body) return Promise.resolve();
+      else {
+        resource = body.status === '1' ? 'success' : 'failure';
 
-      return order_id && resource === 'success' ?
-        client.update({
-          TableName: 'orders',
-          Key: {
-            store_id: store_id,
-            order_id: order_id
-          },
-          UpdateExpression: 'set #status = :status, #payment_id = :payment_id, #MerchantReference = :MerchantReference, #selectedPaymentMethodID = :selectedPaymentMethodID, #payment_timestamp = :payment_timestamp',
-          ConditionExpression: 'attribute_not_exists(#payment_id) AND attribute_exists(#order_id)',
-          ExpressionAttributeNames: {
-            '#order_id': 'order_id',
-            '#payment_id': 'payment_id',
-            '#MerchantReference': 'MerchantReference',
-            '#status': 'status',
-            '#selectedPaymentMethodID': 'selectedPaymentMethodID',
-            '#payment_timestamp': 'payment_timestamp'
-          },
-          ExpressionAttributeValues: {
-            ':payment_id': body.TransactionId,
-            ':MerchantReference': body.MerchantReference,
-            ':status': 'pending',
-            ':selectedPaymentMethodID': 'ethniki',
-            ':payment_timestamp': body.timestamp
-          }
-        }).promise() :
-        // TODO: refund save card charge
-        Promise.resolve({
-          success: true
-        })
-        .then(res => res.success ? Promise.resolve() : Promise.reject(res));
+        return order_id && resource === 'success' ?
+          client.update({
+            TableName: 'orders',
+            Key: {
+              store_id: store_id,
+              order_id: order_id
+            },
+            UpdateExpression: 'set #status = :status, #payment_id = :payment_id, #MerchantReference = :MerchantReference, #selectedPaymentMethodID = :selectedPaymentMethodID, #payment_timestamp = :payment_timestamp',
+            ConditionExpression: 'attribute_not_exists(#payment_id) AND attribute_exists(#order_id)',
+            ExpressionAttributeNames: {
+              '#order_id': 'order_id',
+              '#payment_id': 'payment_id',
+              '#MerchantReference': 'MerchantReference',
+              '#status': 'status',
+              '#selectedPaymentMethodID': 'selectedPaymentMethodID',
+              '#payment_timestamp': 'payment_timestamp'
+            },
+            ExpressionAttributeValues: {
+              ':payment_id': body.TransactionId,
+              ':MerchantReference': body.MerchantReference,
+              ':status': 'pending',
+              ':selectedPaymentMethodID': 'ethniki',
+              ':payment_timestamp': body.timestamp
+            }
+          }).promise() :
+          // TODO: refund save card charge
+          Promise.resolve({
+            success: true
+          })
+          .then(res => res.success ? Promise.resolve() : Promise.reject(res));
+      }
     })
     .then(() => {
       console.log('RequestId SUCCESS');
@@ -128,13 +133,16 @@ exports.handler = function(event, context, callback) {
 
       if (resource === 'success') h3 += 'πραγματοποιήθηκε επιτυχώς!';
       else if (resource === 'expiry') h3 += '';
-      else if (resource === 'back') h3 += 'ακυρώθηκε επιτυχώς!';
-      else h3 += 'απέτυχε!';
+      else if (resource === 'back') {
+        h3 += 'ακυρώθηκε επιτυχώς!';
+        resource = 'backlink';
+
+      } else h3 += 'απέτυχε!';
 
       context.succeed({
         statusCode: 200,
         // TODO: resource
-        body: `<link rel="stylesheet" href="https://${event.store.paymentGateways.ethniki.url.replace('frame.html', '')}style.css">
+        body: `<link rel="stylesheet" href="https://${event.store ? event.store.paymentGateways.ethniki.url.replace('frame.html', '') : 'demo.deliverymanager.gr/ethniki/'}style.css">
             <div align="center">
                 <span class="icon-${resource}" style="color: ${resource === 'success' ? 'lightgreen' : 'red'}; font-size: 200px; font-weight: bold;">
                 </span>
