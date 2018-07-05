@@ -159,6 +159,11 @@ exports.handler = function(event, context, callback) {
                 ExpirationDate: moment().year(parseInt(body.expirydate.slice(2), 10) + 2000).month(parseInt(body.expirydate.slice(0, 2), 10) - 1).endOf('month').format('YYYY-MM-DDT00:00:00')
               };
 
+              if (!card_info.bank && body.issuer) card_info.bank = body.issuer;
+              if (!card_info.cardType && body.card_scheme) card_info.cardType = {
+                Name: body.card_scheme
+              };
+
               if (_.isEmpty(customer.cards)) customer.cards = [];
 
               let index = _.findIndex(customer.cards, {
