@@ -14,6 +14,7 @@ const util = require('@deliverymanager/util');
 const s3_getObject = Promise.promisify(util.s3_getObject);
 const lambda_invoke = Promise.promisify(util.lambda_invoke);
 const prune_null = util.prune_null;
+const prune_empty = util.prune_empty;
 
 const get_card_info = require('./get_card_info');
 
@@ -247,7 +248,7 @@ exports.handler = function(event, context, callback) {
                   '#cards': 'cards'
                 },
                 ExpressionAttributeValues: {
-                  ':cards': customer.cards
+                  ':cards': prune_empty(customer.cards)
                 }
               }).promise();
             }
