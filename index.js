@@ -119,7 +119,7 @@ exports.handler = function(event, context, callback) {
           }).promise() : Promise.resolve(),
           // send message for refund to worker
           !order_id && savecard ? sqs.sendMessage({
-            QueueUrl: 'https://sqs.eu-west-1.amazonaws.com/787324535455/awseb-e-bw5rm6jc3w-stack-AWSEBWorkerQueue-3PIE0EI37NAY',
+            QueueUrl: 'https://sqs.eu-west-1.amazonaws.com/787324535455/worker',
             MessageBody: JSON.stringify({
               type: 'refund',
               refund: {
