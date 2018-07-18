@@ -38,7 +38,11 @@ exports.handler = function(event, context, callback) {
       // let order_id = body.orderid.slice(16);
 
       if (resource === 'back' || resource === 'expiry') return Promise.resolve();
-      else {
+      else if (body.__testing) {
+        console.log('Simulating failed url call from front end');
+        return Promise.resolve();
+
+      } else {
         store_id = body.merchantreference.slice(0, 6);
         order_id = body.merchantreference.slice(6, -10);
         group = body.group;
