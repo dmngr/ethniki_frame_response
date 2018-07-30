@@ -1,5 +1,5 @@
 "use strict";
-var Promise = require('bluebird');
+const Promise = require('bluebird');
 
 const request = Promise.promisify(require('request'), {
   multiArgs: true
@@ -12,7 +12,7 @@ module.exports = function(card_number) {
   return Promise.try(() => {
       if (!card_number || card_number.length < 6) return Promise.reject('Invalid card number: ', card_number);
       else {
-        let api_key = JSON.parse(fs.readFileSync('cred.json', 'utf-8')).bin_api_key;
+        const api_key = JSON.parse(fs.readFileSync('cred.json', 'utf-8')).bin_api_key;
         return request(`https://api.bincodes.com/bin/?format=json&api_key=${api_key}&bin=${card_number.substr(0, 6)}`)
           .spread((res, body) => {
             body = JSON.parse(body);

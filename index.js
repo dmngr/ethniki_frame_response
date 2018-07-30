@@ -1,6 +1,6 @@
 "use strict";
 
-var Promise = require('bluebird');
+const Promise = require('bluebird');
 
 const AWS = require('aws-sdk');
 const client = new AWS.DynamoDB.DocumentClient();
@@ -18,7 +18,7 @@ const prune_empty = util.prune_empty;
 
 const get_card_info = require('./get_card_info');
 
-exports.handler = function(event, context, callback) {
+exports.handler = function(event, context) {
   let resource;
   let group;
   let store_id;
@@ -32,7 +32,7 @@ exports.handler = function(event, context, callback) {
       console.log('event:', JSON.stringify(event, null, 2));
       resource = event.resource.substr(event.resource.lastIndexOf('/') + 1);
       console.log('resource:', resource);
-      let body = event.queryStringParameters;
+      const body = event.queryStringParameters;
       console.log('body:', body);
       // let store_id = body.orderid.slice(0, 6);
       // let order_id = body.orderid.slice(16);
@@ -159,7 +159,7 @@ exports.handler = function(event, context, callback) {
               console.log('Saving card');
               console.log('customer:', customer);
 
-              let creditCard = {
+              const creditCard = {
                 'Number': body.pan,
                 ExpirationDate: moment().year(parseInt(body.expirydate.slice(2), 10) + 2000).month(parseInt(body.expirydate.slice(0, 2), 10) - 1).endOf('month').format('YYYY-MM-DDT00:00:00')
               };
@@ -171,7 +171,7 @@ exports.handler = function(event, context, callback) {
 
               if (_.isEmpty(customer.cards)) customer.cards = [];
 
-              let index = _.findIndex(customer.cards, {
+              const index = _.findIndex(customer.cards, {
                 number: creditCard.Number
               });
 
@@ -194,7 +194,7 @@ exports.handler = function(event, context, callback) {
                 });
 
               } else {
-                let storeIndex = _.findIndex(customer.cards[index].stores, {
+                const storeIndex = _.findIndex(customer.cards[index].stores, {
                   store_id: store_id
                 });
 
@@ -295,7 +295,6 @@ exports.handler = function(event, context, callback) {
         statusCode: 200,
         // TODO: resource
         body: `<link rel="stylesheet" href="https://${event.store ? event.store.paymentGateways.ethniki.url.replace('frame.html', '') : 'demo.deliverymanager.gr/ethniki/'}style.css">
-        <link rel="stylesheet" href="https://${event.store ? event.store.paymentGateways.ethniki.url.replace('frame.html', '') : 'demo.deliverymanager.gr/ethniki/'}fonts/icomoon.woff?leqvcx">
             <div align="center">
                 <span class="icon-${resource}" style="color: ${resource === 'success' ? 'lightgreen' : 'red'}; font-size: 200px; font-weight: bold;">
                 </span>
